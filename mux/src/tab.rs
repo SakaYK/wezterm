@@ -46,6 +46,8 @@ struct TabInner {
     zoomed: Option<Arc<dyn Pane>>,
     title: String,
     recency: Recency,
+    /// When true, keyboard input is mirrored to every pane in this tab
+    sync_input: bool,
 }
 
 /// A Tab is a container of Panes
@@ -706,6 +708,17 @@ impl Tab {
         self.inner.lock().set_active_idx(pane_index)
     }
 
+    /// Returns whether synchronized input is enabled for this tab.
+    /// When enabled, every keystroke is mirrored to all panes in the tab.
+    pub fn sync_input(&self) -> bool {
+        self.inner.lock().sync_input
+    }
+
+    /// Enable or disable synchronized input for this tab.
+    pub fn set_sync_input(&self, enabled: bool) {
+        self.inner.lock().sync_input = enabled;
+    }
+
     /// Assigns the root pane.
     /// This is suitable when creating a new tab and then assigning
     /// the initial pane
@@ -764,6 +777,7 @@ impl TabInner {
             zoomed: None,
             title: String::new(),
             recency: Recency::default(),
+            sync_input: false,
         }
     }
 
