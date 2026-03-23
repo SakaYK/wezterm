@@ -116,9 +116,9 @@ impl Screen {
         // This is a standalone closure so the same logic isn't duplicated at
         // the clear-boundary branch and the normal end-of-logical-line branch.
         let flush = |line: Line,
-                         logical_cursor_x: &mut Option<usize>,
-                         adjusted_cursor: &mut (usize, PhysRowIndex),
-                         rewrapped: &mut VecDeque<Line>| {
+                     logical_cursor_x: &mut Option<usize>,
+                     adjusted_cursor: &mut (usize, PhysRowIndex),
+                     rewrapped: &mut VecDeque<Line>| {
             if let Some(x) = logical_cursor_x.take() {
                 let num_lines = x / physical_cols;
                 let last_x = x - (num_lines * physical_cols);
@@ -164,7 +164,12 @@ impl Screen {
             if is_boundary {
                 if let Some(prior) = logical_line.take() {
                     // `logical_cursor_x` belongs to the prior logical line
-                    flush(prior, &mut logical_cursor_x, &mut adjusted_cursor, &mut rewrapped);
+                    flush(
+                        prior,
+                        &mut logical_cursor_x,
+                        &mut adjusted_cursor,
+                        &mut rewrapped,
+                    );
                 }
                 // The boundary line starts a new logical line.
                 if phys_idx == cursor_y {
@@ -173,7 +178,12 @@ impl Screen {
                 if was_wrapped {
                     logical_line = Some(line);
                 } else {
-                    flush(line, &mut logical_cursor_x, &mut adjusted_cursor, &mut rewrapped);
+                    flush(
+                        line,
+                        &mut logical_cursor_x,
+                        &mut adjusted_cursor,
+                        &mut rewrapped,
+                    );
                 }
                 continue;
             }
@@ -199,12 +209,22 @@ impl Screen {
                 continue;
             }
 
-            flush(line, &mut logical_cursor_x, &mut adjusted_cursor, &mut rewrapped);
+            flush(
+                line,
+                &mut logical_cursor_x,
+                &mut adjusted_cursor,
+                &mut rewrapped,
+            );
         }
 
         // Flush any trailing logical line (e.g. the last line of scrollback was wrapped)
         if let Some(line) = logical_line.take() {
-            flush(line, &mut logical_cursor_x, &mut adjusted_cursor, &mut rewrapped);
+            flush(
+                line,
+                &mut logical_cursor_x,
+                &mut adjusted_cursor,
+                &mut rewrapped,
+            );
         }
 
         self.lines = rewrapped;
@@ -374,15 +394,12 @@ impl Screen {
         if self.allow_scrollback {
             let viewport_start = self.lines.len().saturating_sub(physical_rows);
             // Scan backwards for the most recent CLEAR_BOUNDARY (highest index).
-            if let Some(boundary_idx) = (0..self.lines.len())
-                .rev()
-                .find(|&i| {
-                    self.lines
-                        .get(i)
-                        .map(|l| l.is_clear_boundary())
-                        .unwrap_or(false)
-                })
-            {
+            if let Some(boundary_idx) = (0..self.lines.len()).rev().find(|&i| {
+                self.lines
+                    .get(i)
+                    .map(|l| l.is_clear_boundary())
+                    .unwrap_or(false)
+            }) {
                 if viewport_start < boundary_idx {
                     let pad = boundary_idx - viewport_start;
                     for _ in 0..pad {

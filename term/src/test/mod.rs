@@ -1450,7 +1450,8 @@ fn test_clear_boundary_erase_to_end_not_at_row0_no_flag() {
     for (i, l) in visible.iter().enumerate() {
         assert!(
             !l.is_clear_boundary(),
-            "Line {i} should NOT have CLEAR_BOUNDARY for a partial erase"
+            "Line {} should NOT have CLEAR_BOUNDARY for a partial erase",
+            i
         );
     }
 }
@@ -1565,12 +1566,7 @@ fn test_clear_boundary_erase_display_resize_taller() {
 fn test_clear_boundary_resize_wider_then_narrower() {
     let mut term = TestTerm::new(4, 8, 20);
     term.print("AABBCCDDXXYYWWZZ\r\n");
-    assert_visible_contents(
-        &term,
-        file!(),
-        line!(),
-        &["AABBCCDD", "XXYYWWZZ", "", ""],
-    );
+    assert_visible_contents(&term, file!(), line!(), &["AABBCCDD", "XXYYWWZZ", "", ""]);
 
     // Ctrl+L.
     term.cup(0, 0);
@@ -1641,7 +1637,8 @@ fn test_clear_boundary_erase_to_start_no_flag() {
     for (i, l) in visible.iter().enumerate() {
         assert!(
             !l.is_clear_boundary(),
-            "Line {i} should NOT have CLEAR_BOUNDARY for EraseToStartOfDisplay"
+            "Line {} should NOT have CLEAR_BOUNDARY for EraseToStartOfDisplay",
+            i
         );
     }
 }
