@@ -256,13 +256,9 @@ impl super::TermWindow {
                             .write_all(encoded.as_bytes())
                             .context("sync: kitty encoded")
                     } else if window_key.key_is_down {
-                        other
-                            .key_down(*key_code, window_key.modifiers)
-                            .context("sync: key_down")
+                        other.key_down(*key_code, window_key.modifiers).context("sync: key_down")
                     } else {
-                        other
-                            .key_up(*key_code, window_key.modifiers)
-                            .context("sync: key_up")
+                        other.key_up(*key_code, window_key.modifiers).context("sync: key_up")
                     };
                     if let Err(err) = res {
                         log::warn!("sync_input pane {}: {:#}", other.pane_id(), err);
@@ -273,7 +269,11 @@ impl super::TermWindow {
                 Key::Composed(s) => {
                     if window_key.key_is_down {
                         if let Err(err) = other.writer().write_all(s.as_bytes()) {
-                            log::warn!("sync_input pane {} composed: {:#}", other.pane_id(), err);
+                            log::warn!(
+                                "sync_input pane {} composed: {:#}",
+                                other.pane_id(),
+                                err
+                            );
                         } else {
                             self.maybe_scroll_to_bottom_for_input(&other);
                         }
