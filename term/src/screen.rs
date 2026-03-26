@@ -139,11 +139,24 @@ impl Screen {
                 }
             }
 
+            let is_boundary = line.is_clear_boundary();
+            let first_idx = rewrapped.len();
+
             if line.len() <= physical_cols {
                 rewrapped.push_back(line);
             } else {
                 for l in line.wrap(physical_cols, seqno) {
                     rewrapped.push_back(l);
+                }
+            }
+
+            // Line::wrap() creates new Line objects that do not inherit the
+            // CLEAR_BOUNDARY flag.  Re-apply it to the first resulting
+            // sub-line so that subsequent resizes can still locate the
+            // boundary and avoid re-exposing old scrollback content.
+            if is_boundary {
+                if let Some(first) = rewrapped.get_mut(first_idx) {
+                    first.set_clear_boundary(true, seqno);
                 }
             }
         };
