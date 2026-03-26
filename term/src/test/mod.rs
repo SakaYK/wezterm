@@ -1750,6 +1750,90 @@ fn test_clear_boundary_new_content_after_clear_then_resize() {
     }
 }
 
+/// After Ctrl+L, the shell redraws a prompt on the boundary line.
+/// If the prompt is long enough to wrap when the terminal is resized narrower,
+/// the CLEAR_BOUNDARY flag must survive the rewrap so that a subsequent resize
+/// does not re-expose old scrollback content.  This is the scenario reported
+/// when SSHing: clear → prompt redrawn → resize left/right → old output shown.
+#[test]
+fn test_clear_boundary_prompt_on_boundary_line_resize_narrower() {
+    let mut term = TestTerm::new(4, 20, 30);
+    // Print enough lines to overflow the viewport and push content into scrollback.
+    for i in 0..10 {
+        term.print(format!("old_output_line_{:02}\r\n", i));
+    }
+
+    // Ctrl+L: cursor home + erase to end.
+    term.cup(0, 0);
+    term.erase_in_display(EraseInDisplay::EraseToEndOfDisplay);
+    assert_viewport_is_blank(&term, file!(), line!());
+
+    // Shell redraws its prompt on the first (boundary) line.
+    term.print("user@host:~/project$");
+
+    // Resize narrower — the prompt wraps, which loses the boundary flag
+    // because Line::wrap() creates new Line objects without it.
+    term.resize(TerminalSize {
+        rows: 4,
+        cols: 10,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    // The viewport should show the wrapped prompt, not old scrollback.
+    let screen = term.screen();
+    let visible = screen.visible_lines();
+    for (i, l) in visible.iter().enumerate() {
+        let s = l.as_str();
+        assert!(
+            !s.contains("old"),
+            "line {} should not contain old content but has: '{}'",
+            i,
+            s.escape_default()
+        );
+    }
+
+    // Resize back wider — old content must still not reappear.
+    term.resize(TerminalSize {
+        rows: 4,
+        cols: 20,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    let screen = term.screen();
+    let visible = screen.visible_lines();
+    for (i, l) in visible.iter().enumerate() {
+        let s = l.as_str();
+        assert!(
+            !s.contains("old"),
+            "line {} should not contain old content after re-widen but has: '{}'",
+            i,
+            s.escape_default()
+        );
+    }
+
+    // Resize taller — old content must still not reappear.
+    term.resize(TerminalSize {
+        rows: 8,
+        cols: 20,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    let screen = term.screen();
+    let visible = screen.visible_lines();
+    for (i, l) in visible.iter().enumerate() {
+        let s = l.as_str();
+        assert!(
+            !s.contains("old"),
+            "line {} should not contain old content after growing taller but has: '{}'",
+            i,
+            s.escape_default()
+        );
+    }
+}
+
 /// Multiple clears: clear → type → clear again → resize.
 /// The second boundary should be the one that protects the viewport.
 #[test]
