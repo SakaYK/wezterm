@@ -316,11 +316,18 @@ where
     }
 }
 
+/// Minimum number of columns a single pane should occupy so that it
+/// remains readable.
+const MIN_PANE_COLS: usize = 10;
+/// Minimum number of rows a single pane should occupy so that it
+/// remains readable.
+const MIN_PANE_ROWS: usize = 3;
+
 /// Computes the minimum (x, y) size based on the panes in this portion
 /// of the tree.
 fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
     match tree {
-        Tree::Node { data: None, .. } | Tree::Empty => (1, 1),
+        Tree::Node { data: None, .. } | Tree::Empty => (MIN_PANE_COLS, MIN_PANE_ROWS),
         Tree::Node {
             left,
             right,
@@ -333,7 +340,28 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
                 SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
             }
         }
-        Tree::Leaf(_) => (1, 1),
+        Tree::Leaf(_) => (MIN_PANE_COLS, MIN_PANE_ROWS),
+    }
+}
+
+/// Same as `compute_min_size` but borrows immutably, so it can be used
+/// with `Cursor::subtree()`.
+fn compute_min_size_ref(tree: &Tree) -> (usize, usize) {
+    match tree {
+        Tree::Node { data: None, .. } | Tree::Empty => (MIN_PANE_COLS, MIN_PANE_ROWS),
+        Tree::Node {
+            left,
+            right,
+            data: Some(data),
+        } => {
+            let (left_x, left_y) = compute_min_size_ref(left);
+            let (right_x, right_y) = compute_min_size_ref(right);
+            match data.direction {
+                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + 1),
+                SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
+            }
+        }
+        Tree::Leaf(_) => (MIN_PANE_COLS, MIN_PANE_ROWS),
     }
 }
 
@@ -1210,15 +1238,23 @@ impl TabInner {
             // child and adjust the second, so if we are split down the middle
             // and the window is made wider, the right column will grow in
             // size, leaving the left at its current width.
+            // We must clamp the first child so that the second child always
+            // retains at least MIN_PANE_COLS / MIN_PANE_ROWS; otherwise the
+            // second child (and any panes it contains) would shrink to zero
+            // and disappear from the terminal.
             if node.direction == SplitDirection::Horizontal {
                 node.first.rows = pane_size.rows;
                 node.second.rows = pane_size.rows;
 
+                let max_first_cols = pane_size.cols.saturating_sub(MIN_PANE_COLS + 1);
+                node.first.cols = node.first.cols.min(max_first_cols).max(MIN_PANE_COLS);
                 node.second.cols = pane_size.cols.saturating_sub(1 + node.first.cols);
             } else {
                 node.first.cols = pane_size.cols;
                 node.second.cols = pane_size.cols;
 
+                let max_first_rows = pane_size.rows.saturating_sub(MIN_PANE_ROWS + 1);
+                node.first.rows = node.first.rows.min(max_first_rows).max(MIN_PANE_ROWS);
                 node.second.rows = pane_size.rows.saturating_sub(1 + node.first.rows);
             }
             node.first.pixel_width = node.first.cols * cell_width;
@@ -1307,6 +1343,22 @@ impl TabInner {
 
     fn adjust_node_at_cursor(&mut self, cursor: &mut Cursor, delta: isize) {
         let cell_dimensions = self.cell_dimensions();
+
+        // Compute the actual minimum sizes of the left and right subtrees
+        // so we never shrink either child below what it structurally needs.
+        let (min_first_x, min_first_y, min_second_x, min_second_y) = match cursor.subtree() {
+            bintree::Tree::Node {
+                left,
+                right,
+                data: Some(_),
+            } => {
+                let (lfx, lfy) = compute_min_size_ref(left);
+                let (rfx, rfy) = compute_min_size_ref(right);
+                (lfx, lfy, rfx, rfy)
+            }
+            _ => (MIN_PANE_COLS, MIN_PANE_ROWS, MIN_PANE_COLS, MIN_PANE_ROWS),
+        };
+
         if let Ok(Some(node)) = cursor.node_mut() {
             match node.direction {
                 SplitDirection::Horizontal => {
@@ -1315,8 +1367,8 @@ impl TabInner {
                     let mut cols = node.first.cols as isize;
                     cols = cols
                         .saturating_add(delta)
-                        .max(1)
-                        .min((width as isize).saturating_sub(2));
+                        .max(min_first_x as isize)
+                        .min((width as isize).saturating_sub(min_second_x as isize + 1));
                     node.first.cols = cols as usize;
                     node.first.pixel_width =
                         node.first.cols.saturating_mul(cell_dimensions.pixel_width);
@@ -1331,8 +1383,8 @@ impl TabInner {
                     let mut rows = node.first.rows as isize;
                     rows = rows
                         .saturating_add(delta)
-                        .max(1)
-                        .min((height as isize).saturating_sub(2));
+                        .max(min_first_y as isize)
+                        .min((height as isize).saturating_sub(min_second_y as isize + 1));
                     node.first.rows = rows as usize;
                     node.first.pixel_height =
                         node.first.rows.saturating_mul(cell_dimensions.pixel_height);
@@ -2625,5 +2677,214 @@ mod test {
 
         assert_eq!(tab_a.sync_input(), true);
         assert_eq!(tab_b.sync_input(), false);
+    }
+
+    /// Reproducer: 3 vertical split panes (arranged side-by-side via
+    /// Horizontal splits).  Drag the outer split far to the RIGHT so
+    /// the first pane expands and squishes the subtree holding panes
+    /// 2+3.  The cascade through `apply_pane_size` must not let the
+    /// innermost child reach zero width and vanish.
+    #[test]
+    fn resize_split_does_not_push_pane_out_of_bounds_horizontal() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // Split pane 0 horizontally -> pane 0 (left) | pane 1 (right)
+        let split1 = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, split1.second),
+        )
+        .unwrap();
+
+        // Split pane 1 (the right pane) horizontally again
+        // -> pane 0 | pane 1 | pane 2
+        let split2 = tab
+            .compute_split_size(
+                1,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            1,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(3, split2.second),
+        )
+        .unwrap();
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        // All three panes should have width > 0
+        for p in &panes {
+            assert!(
+                p.width > 0,
+                "pane {} has zero width before resize",
+                p.index
+            );
+        }
+
+        // Now drag split 0 very far to the RIGHT (+200 delta).
+        // This expands pane 0 and squishes the subtree that contains
+        // panes 1+2.  The cascaded size for the inner split can become
+        // so small that `saturating_sub(1 + node.first.cols)` underflows
+        // to 0, making pane 2 disappear.
+        tab.resize_split_by(0, 200);
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        // Every pane must remain readable (>= MIN_PANE_COLS x MIN_PANE_ROWS).
+        for p in &panes {
+            assert!(
+                p.width >= 10,
+                "pane {} (id={}) too narrow to read: width={}",
+                p.index,
+                p.pane.pane_id(),
+                p.width,
+            );
+            assert!(
+                p.height >= 3,
+                "pane {} (id={}) too short to read: height={}",
+                p.index,
+                p.pane.pane_id(),
+                p.height,
+            );
+        }
+
+        // Also verify that panes don't overlap or exceed the tab width
+        let last = panes.last().unwrap();
+        assert!(
+            last.left + last.width <= 80,
+            "last pane extends beyond tab: left={} width={} tab_cols=80",
+            last.left,
+            last.width,
+        );
+    }
+
+    /// Same scenario but with 3 vertically-stacked panes (Vertical splits).
+    /// Drag the outer split far DOWNWARD; the last pane should not
+    /// disappear off the bottom.
+    #[test]
+    fn resize_split_does_not_push_pane_out_of_bounds_vertical() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // Split pane 0 vertically -> pane 0 (top) / pane 1 (bottom)
+        let split1 = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                ..Default::default()
+            },
+            FakePane::new(2, split1.second),
+        )
+        .unwrap();
+
+        // Split pane 1 (the bottom pane) vertically again
+        // -> pane 0 / pane 1 / pane 2
+        let split2 = tab
+            .compute_split_size(
+                1,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            1,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                ..Default::default()
+            },
+            FakePane::new(3, split2.second),
+        )
+        .unwrap();
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        for p in &panes {
+            assert!(
+                p.height > 0,
+                "pane {} has zero height before resize",
+                p.index
+            );
+        }
+
+        // Drag split 0 very far DOWNWARD (+200 delta).
+        tab.resize_split_by(0, 200);
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        for p in &panes {
+            assert!(
+                p.width >= 10,
+                "pane {} (id={}) too narrow to read: width={}",
+                p.index,
+                p.pane.pane_id(),
+                p.width,
+            );
+            assert!(
+                p.height >= 3,
+                "pane {} (id={}) too short to read: height={}",
+                p.index,
+                p.pane.pane_id(),
+                p.height,
+            );
+        }
+
+        let last = panes.last().unwrap();
+        assert!(
+            last.top + last.height <= 24,
+            "last pane extends beyond tab: top={} height={} tab_rows=24",
+            last.top,
+            last.height,
+        );
     }
 }
