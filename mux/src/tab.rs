@@ -747,6 +747,27 @@ impl Tab {
         self.inner.lock().sync_input = enabled;
     }
 
+    /// Send a paste to the given pane. When sync input is enabled,
+    /// the paste is also forwarded to every other pane in the tab.
+    pub fn send_paste(&self, pane: &Arc<dyn Pane>, text: &str) -> anyhow::Result<()> {
+        pane.send_paste(text)?;
+        if self.sync_input() {
+            let active_id = pane.pane_id();
+            for pos in self.iter_panes_ignoring_zoom() {
+                if pos.pane.pane_id() != active_id {
+                    if let Err(err) = pos.pane.send_paste(text) {
+                        log::warn!(
+                            "sync_paste pane {}: {:#}",
+                            pos.pane.pane_id(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Assigns the root pane.
     /// This is suitable when creating a new tab and then assigning
     /// the initial pane
@@ -2268,6 +2289,8 @@ mod test {
     use parking_lot::{MappedMutexGuard, Mutex};
     use rangeset::RangeSet;
     use std::ops::Range;
+    use std::io::Read;
+    use std::path::PathBuf;
     use termwiz::surface::SequenceNo;
     use url::Url;
     use wezterm_term::color::ColorPalette;
@@ -2276,15 +2299,36 @@ mod test {
     struct FakePane {
         id: PaneId,
         size: Mutex<TerminalSize>,
+        paste_file: PathBuf,
     }
 
     impl FakePane {
-        fn new(id: PaneId, size: TerminalSize) -> Arc<dyn Pane> {
+        fn new(id: PaneId, size: TerminalSize) -> Arc<Self> {
+            let paste_file = std::env::temp_dir().join(format!(
+                "wezterm-test-pane-{}-{}.txt",
+                id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::write(&paste_file, "").unwrap();
             Arc::new(Self {
                 id,
                 size: Mutex::new(size),
+                paste_file,
             })
         }
+    }
+
+    /// Read paste content written by a FakePane
+    fn read_paste_file(path: &PathBuf) -> String {
+        let mut content = String::new();
+        std::fs::File::open(path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        content
     }
 
     impl Pane for FakePane {
@@ -2339,8 +2383,9 @@ mod test {
         fn get_title(&self) -> String {
             unimplemented!()
         }
-        fn send_paste(&self, _text: &str) -> anyhow::Result<()> {
-            unimplemented!()
+        fn send_paste(&self, text: &str) -> anyhow::Result<()> {
+            std::fs::write(&self.paste_file, text)?;
+            Ok(())
         }
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
@@ -2393,7 +2438,7 @@ mod test {
         };
 
         let tab = Tab::new(&size);
-        tab.assign_pane(&FakePane::new(1, size));
+        tab.assign_pane(&(FakePane::new(1, size) as Arc<dyn Pane>));
 
         let panes = tab.iter_panes();
         assert_eq!(1, panes.len());
@@ -2481,7 +2526,7 @@ mod test {
                     direction: SplitDirection::Horizontal,
                     ..Default::default()
                 },
-                FakePane::new(2, horz_size.second),
+                FakePane::new(2, horz_size.second) as Arc<dyn Pane>,
             )
             .unwrap();
         assert_eq!(new_index, 1);
@@ -2527,7 +2572,7 @@ mod test {
                     target_is_second: true,
                     size: Default::default(),
                 },
-                FakePane::new(3, vert_size.second),
+                FakePane::new(3, vert_size.second) as Arc<dyn Pane>,
             )
             .unwrap();
         assert_eq!(new_index, 1);
@@ -2633,7 +2678,7 @@ mod test {
             dpi: 96,
         };
         let tab = Tab::new(&size);
-        tab.assign_pane(&FakePane::new(1, size));
+        tab.assign_pane(&(FakePane::new(1, size) as Arc<dyn Pane>));
 
         tab.set_sync_input(true);
 
@@ -2653,7 +2698,7 @@ mod test {
                 direction: SplitDirection::Horizontal,
                 ..Default::default()
             },
-            FakePane::new(2, split_size.second),
+            FakePane::new(2, split_size.second) as Arc<dyn Pane>,
         )
         .unwrap();
 
@@ -2679,6 +2724,172 @@ mod test {
         assert_eq!(tab_b.sync_input(), false);
     }
 
+    #[test]
+    fn paste_syncs_to_other_pane_when_sync_input_enabled() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        let pane1 = FakePane::new(1, size);
+        tab.assign_pane(&(Arc::clone(&pane1) as Arc<dyn Pane>));
+
+        let split_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let pane2 = FakePane::new(2, split_size.second);
+        let pane2_file = pane2.paste_file.clone();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            Arc::clone(&pane2) as Arc<dyn Pane>,
+        )
+        .unwrap();
+
+        tab.set_sync_input(true);
+
+        // User pastes into pane1 via the tab
+        tab.send_paste(&(pane1 as Arc<dyn Pane>), "hello sync").unwrap();
+
+        // Read pane2's file — it should contain the same text
+        let pane2_content = read_paste_file(&pane2_file);
+        assert_eq!(
+            pane2_content, "hello sync",
+            "pane2 file must contain the pasted text when sync input is enabled"
+        );
+    }
+
+    #[test]
+    fn paste_does_not_sync_when_sync_input_disabled() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        let pane1 = FakePane::new(1, size);
+        tab.assign_pane(&(Arc::clone(&pane1) as Arc<dyn Pane>));
+
+        let split_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let pane2 = FakePane::new(2, split_size.second);
+        let pane2_file = pane2.paste_file.clone();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            Arc::clone(&pane2) as Arc<dyn Pane>,
+        )
+        .unwrap();
+
+        // sync is OFF
+        assert_eq!(tab.sync_input(), false);
+
+        tab.send_paste(&(pane1 as Arc<dyn Pane>), "private").unwrap();
+
+        // pane2's file must still be empty
+        let pane2_content = read_paste_file(&pane2_file);
+        assert_eq!(
+            pane2_content, "",
+            "pane2 file must be empty when sync input is disabled"
+        );
+    }
+
+    #[test]
+    fn paste_syncs_to_all_panes_in_three_way_split() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        let pane1 = FakePane::new(1, size);
+        tab.assign_pane(&(Arc::clone(&pane1) as Arc<dyn Pane>));
+
+        let split_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let pane2 = FakePane::new(2, split_size.second);
+        let pane2_file = pane2.paste_file.clone();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            Arc::clone(&pane2) as Arc<dyn Pane>,
+        )
+        .unwrap();
+
+        let split_size2 = tab
+            .compute_split_size(
+                1,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let pane3 = FakePane::new(3, split_size2.second);
+        let pane3_file = pane3.paste_file.clone();
+        tab.split_and_insert(
+            1,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                ..Default::default()
+            },
+            Arc::clone(&pane3) as Arc<dyn Pane>,
+        )
+        .unwrap();
+
+        tab.set_sync_input(true);
+        assert_eq!(tab.iter_panes().len(), 3);
+
+        // User pastes into pane1 via the tab
+        tab.send_paste(&(pane1 as Arc<dyn Pane>), "broadcast").unwrap();
+
+        // Read pane2 and pane3 files — both should have the text
+        assert_eq!(
+            read_paste_file(&pane2_file), "broadcast",
+            "pane2 file must contain pasted text"
+        );
+        assert_eq!(
+            read_paste_file(&pane3_file), "broadcast",
+            "pane3 file must contain pasted text"
+        );
+    }
+
     /// Reproducer: 3 vertical split panes (arranged side-by-side via
     /// Horizontal splits).  Drag the outer split far to the RIGHT so
     /// the first pane expands and squishes the subtree holding panes
@@ -2695,7 +2906,7 @@ mod test {
         };
 
         let tab = Tab::new(&size);
-        tab.assign_pane(&FakePane::new(1, size));
+        tab.assign_pane(&(FakePane::new(1, size) as Arc<dyn Pane>));
 
         // Split pane 0 horizontally -> pane 0 (left) | pane 1 (right)
         let split1 = tab
@@ -2713,7 +2924,7 @@ mod test {
                 direction: SplitDirection::Horizontal,
                 ..Default::default()
             },
-            FakePane::new(2, split1.second),
+            FakePane::new(2, split1.second) as Arc<dyn Pane>,
         )
         .unwrap();
 
@@ -2734,7 +2945,7 @@ mod test {
                 direction: SplitDirection::Horizontal,
                 ..Default::default()
             },
-            FakePane::new(3, split2.second),
+            FakePane::new(3, split2.second) as Arc<dyn Pane>,
         )
         .unwrap();
 
@@ -2802,7 +3013,7 @@ mod test {
         };
 
         let tab = Tab::new(&size);
-        tab.assign_pane(&FakePane::new(1, size));
+        tab.assign_pane(&(FakePane::new(1, size) as Arc<dyn Pane>));
 
         // Split pane 0 vertically -> pane 0 (top) / pane 1 (bottom)
         let split1 = tab
@@ -2820,7 +3031,7 @@ mod test {
                 direction: SplitDirection::Vertical,
                 ..Default::default()
             },
-            FakePane::new(2, split1.second),
+            FakePane::new(2, split1.second) as Arc<dyn Pane>,
         )
         .unwrap();
 
@@ -2841,7 +3052,7 @@ mod test {
                 direction: SplitDirection::Vertical,
                 ..Default::default()
             },
-            FakePane::new(3, split2.second),
+            FakePane::new(3, split2.second) as Arc<dyn Pane>,
         )
         .unwrap();
 
