@@ -35,11 +35,12 @@ impl TermWindow {
             ClipboardPasteSource::Clipboard => Clipboard::Clipboard,
             ClipboardPasteSource::PrimarySelection => Clipboard::PrimarySelection,
         };
+        let mux_window_id = self.mux_window_id;
         let future = window.get_clipboard(clipboard);
         promise::spawn::spawn(async move {
             if let Ok(clip) = future.await {
                 window.notify(TermWindowNotif::Apply(Box::new(move |myself| {
-                    if let Some(pane) = myself
+                    let pane = myself
                         .pane_state(pane_id)
                         .overlay
                         .as_ref()
@@ -47,9 +48,14 @@ impl TermWindow {
                         .or_else(|| {
                             let mux = Mux::get();
                             mux.get_pane(pane_id)
-                        })
-                    {
-                        pane.send_paste(&clip).ok();
+                        });
+                    if let Some(pane) = pane {
+                        let mux = Mux::get();
+                        if let Some(tab) = mux.get_active_tab_for_window(mux_window_id) {
+                            tab.send_paste(&pane, &clip).ok();
+                        } else {
+                            pane.send_paste(&clip).ok();
+                        }
                     }
                 })));
             }
