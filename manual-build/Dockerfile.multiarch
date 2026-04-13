@@ -1,0 +1,51 @@
+ARG DISTRO=ubuntu:26.04
+FROM docker.io/${DISTRO}
+
+ARG PKG_FORMAT=deb
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PKG_FORMAT=${PKG_FORMAT}
+
+# ---------- Debian / Ubuntu ----------
+RUN if command -v apt-get >/dev/null 2>&1; then \
+    apt-get update && apt-get install -y \
+      curl build-essential \
+      bsdutils cmake dpkg-dev fakeroot gcc g++ git \
+      libegl1-mesa-dev libssl-dev libfontconfig1-dev \
+      libwayland-dev libx11-xcb-dev libxcb-ewmh-dev \
+      libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev \
+      libxcb-randr0-dev libxcb-render0-dev libxcb-xkb-dev \
+      libxkbcommon-dev libxkbcommon-x11-dev libxcb-util-dev \
+      lsb-release python3 xdg-utils xorg-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*; \
+  fi
+
+# ---------- Fedora ----------
+RUN if command -v dnf >/dev/null 2>&1; then \
+    dnf install -y \
+      curl gcc gcc-c++ make cmake git \
+      fontconfig-devel openssl-devel libxcb-devel \
+      libxkbcommon-devel libxkbcommon-x11-devel \
+      wayland-devel xcb-util-devel xcb-util-keysyms-devel \
+      xcb-util-image-devel xcb-util-wm-devel \
+      mesa-libEGL-devel rpm-build redhat-lsb-core \
+      pkg-config perl-FindBin perl-File-Compare \
+    && dnf clean all; \
+  fi
+
+# ---------- CentOS Stream ----------
+RUN if command -v yum >/dev/null 2>&1 && ! command -v dnf >/dev/null 2>&1; then \
+    yum install -y epel-release && \
+    yum install -y \
+      curl gcc gcc-c++ make cmake3 git \
+      fontconfig-devel openssl-devel libxcb-devel \
+      libxkbcommon-devel libxkbcommon-x11-devel \
+      wayland-devel mesa-libEGL-devel rpm-build \
+      redhat-lsb-core pkg-config \
+    && yum clean all; \
+  fi
+
+# ---------- Install Rust ----------
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build

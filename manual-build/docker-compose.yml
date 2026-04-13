@@ -1,0 +1,127 @@
+services:
+  # === Ubuntu ===
+  ubuntu-26.04:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: ubuntu:26.04
+        PKG_FORMAT: deb
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  ubuntu-24.04:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: ubuntu:24.04
+        PKG_FORMAT: deb
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  ubuntu-22.04:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: ubuntu:22.04
+        PKG_FORMAT: deb
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  # === Debian ===
+  debian-12:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: debian:12
+        PKG_FORMAT: deb
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  debian-11:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: debian:11
+        PKG_FORMAT: deb
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  # === Fedora ===
+  fedora-41:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: fedora:41
+        PKG_FORMAT: rpm
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  fedora-40:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: fedora:40
+        PKG_FORMAT: rpm
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+  # === CentOS ===
+  centos-stream9:
+    build:
+      context: .
+      dockerfile: Dockerfile.multiarch
+      args:
+        DISTRO: quay.io/centos/centos:stream9
+        PKG_FORMAT: rpm
+    environment:
+      - TAG_SUFFIX=${TAG_SUFFIX:-}
+    volumes:
+      - ..:/build:z
+      - cargo-registry:/root/.cargo/registry
+      - ./output:/output:z
+    command: bash /build/manual-build/build.sh
+
+volumes:
+  cargo-registry:
